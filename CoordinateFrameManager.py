@@ -1,3 +1,9 @@
+'''
+“If a target exists at position x, what would the sensor ideally measure?”
+
+state: x=[p_N, p_E, v_N, v_E]
+'''
+
 import numpy as np
 
 class CoordinateFrameManager:
@@ -75,7 +81,7 @@ class CoordinateFrameManager:
 
     @staticmethod
     def run_tests():
-        print("Running CoordinateFrameManager tests...")
+        print("Running enhanced CoordinateFrameManager tests...")
 
         cfm = CoordinateFrameManager(
             camera_offset=np.array([-80.0, 120.0]),
@@ -84,38 +90,125 @@ class CoordinateFrameManager:
             ais_R=np.eye(2)
         )
 
-        # ── Test 1: Radar basic geometry ──────────
-        x = np.array([40.0, 30.0, 0, 0])
+        # ─────────────────────────────────────────────
+        # TEST 1: Radar basic geometry (known triangle)
+        # ─────────────────────────────────────────────
+        x = np.array([3.0, 4.0, 0, 0])
         z = cfm.h(x, "radar")
 
-        assert np.isclose(z[0], 50.0), "Radar range incorrect"
-        assert np.isclose(z[1], 0.6435), "Radar bearing incorrect"
+        assert np.isclose(z[0], 5.0), "Radar range incorrect"
+        assert np.isclose(z[1], np.arctan2(4.0, 3.0)), "Radar bearing incorrect"
 
-        # ── Test 2: Camera offset ────────────────
-        cfm.camera_offset = np.array([0.0, 10.0])
-        x = np.array([0.0, 20.0, 0, 0])
+
+        # ─────────────────────────────────────────────
+        # TEST 2: Bearing sign convention (quadrant test)
+        # ─────────────────────────────────────────────
+        x = np.array([-10.0, 10.0, 0, 0])
+        z = cfm.h(x, "radar")
+
+        expected_phi = np.arctan2(10.0, -10.0)
+
+        assert np.isclose(z[1], expected_phi), "Bearing quadrant incorrect"
+
+
+        # ─────────────────────────────────────────────
+        # TEST 3: Camera offset correctness
+        # ─────────────────────────────────────────────
+        cfm.camera_offset = np.array([10.0, 0.0])
+
+        x = np.array([10.0, 10.0, 0, 0])  # target directly north of camera
 
         z = cfm.h(x, "camera")
 
         assert np.isclose(z[0], 10.0), "Camera range incorrect"
         assert np.isclose(z[1], np.pi / 2), "Camera bearing incorrect"
 
-        # ── Test 3: AIS consistency ──────────────
-        # Make vessel coincide with radar
+
+        # ─────────────────────────────────────────────
+        # TEST 4: AIS equals radar when vessel at origin
+        # ─────────────────────────────────────────────
         cfm.update_vessel_position(np.array([0.0, 0.0]))
+
+        x = np.array([20.0, 0.0, 0, 0])
 
         z_ais = cfm.h(x, "ais")
         z_radar = cfm.h(x, "radar")
 
-        assert np.allclose(z_ais, z_radar), "AIS conversion incorrect"
+        assert np.allclose(z_ais, z_radar), "AIS vs radar mismatch at origin"
 
-        # ── Test 4: Jacobian shape ───────────────
+
+        # ─────────────────────────────────────────────
+        # TEST 5: AIS moving reference correctness
+        # ─────────────────────────────────────────────
+        cfm.update_vessel_position(np.array([10.0, 5.0]))
+
+        x = np.array([20.0, 15.0, 0, 0])
+
+        z_ais = cfm.h(x, "ais")
+
+        expected = np.array([10.0, 10.0])  # relative position
+        z_exp = cfm.h(expected, "radar")
+
+        assert np.allclose(z_ais, z_exp), "AIS moving reference incorrect"
+
+
+        # ─────────────────────────────────────────────
+        # TEST 6: Symmetry test (swap N/E should rotate bearing)
+        # ─────────────────────────────────────────────
+        x1 = np.array([10.0, 0.0, 0, 0])
+        x2 = np.array([0.0, 10.0, 0, 0])
+
+        z1 = cfm.h(x1, "radar")
+        z2 = cfm.h(x2, "radar")
+
+        assert np.isclose(z1[1], 0.0), "Bearing for east target incorrect"
+        assert np.isclose(z2[1], np.pi/2), "Bearing for north target incorrect"
+
+
+        # ─────────────────────────────────────────────
+        # TEST 7: Jacobian shape
+        # ─────────────────────────────────────────────
         x = np.array([50.0, 30.0, 0, 0])
         H = cfm.H(x, "radar")
 
         assert H.shape == (2, 4), "Jacobian shape incorrect"
 
-        print("All tests passed!")
+
+        # ─────────────────────────────────────────────
+        # TEST 8: Jacobian finite difference check (VERY IMPORTANT)
+        # ─────────────────────────────────────────────
+        eps = 1e-5
+        x = np.array([20.0, 15.0, 0, 0])
+
+        H_analytic = cfm.H(x, "radar")
+
+        H_numeric = np.zeros_like(H_analytic)
+
+        for i in range(2):  # only position affects measurement
+            dx = np.zeros(4)
+            dx[i] = eps
+
+            h1 = cfm.h(x + dx, "radar")
+            h0 = cfm.h(x - dx, "radar")
+
+            H_numeric[:, i] = (h1 - h0) / (2 * eps)
+
+        assert np.allclose(H_analytic[:, :2], H_numeric[:, :2], atol=1e-4), \
+            "Jacobian mismatch with numerical derivative"
+
+
+        # ─────────────────────────────────────────────
+        # TEST 9: Division safety (edge case)
+        # ─────────────────────────────────────────────
+        x = np.array([0.0, 0.0, 0, 0])
+
+        try:
+            cfm.h(x, "radar")
+        except Exception:
+            assert False, "Radar failed at origin (should be handled or defined)"
+
+
+        print("All enhanced tests passed!")
 
 
 if __name__ == "__main__":
