@@ -18,13 +18,11 @@ class CoordinateFrameManager:
             "ais": ais_R
         }
 
-    # ─────────────────────────────────────────────
-    # GNSS update
-    # ─────────────────────────────────────────────
+    
     def update_vessel_position(self, vessel_ned: np.ndarray):
         self.vessel_position = vessel_ned.copy()
 
-    # ─────────────────────────────────────────────
+
     def get_sensor_position(self, sensor_id: str) -> np.ndarray:
         if sensor_id == "radar":
             return self.radar_offset
@@ -35,7 +33,7 @@ class CoordinateFrameManager:
         else:
             raise ValueError(f"Unknown sensor: {sensor_id}")
 
-    # ─────────────────────────────────────────────
+    
     def h(self, x: np.ndarray, sensor_id: str) -> np.ndarray:
         p = x[:2]
         s = self.get_sensor_position(sensor_id)
@@ -46,7 +44,7 @@ class CoordinateFrameManager:
 
         return np.array([r, phi])
 
-    # ─────────────────────────────────────────────
+    
     def H(self, x: np.ndarray, sensor_id: str) -> np.ndarray:
         p = x[:2]
         s = self.get_sensor_position(sensor_id)
@@ -69,13 +67,11 @@ class CoordinateFrameManager:
 
         return H
 
-    # ─────────────────────────────────────────────
+    
     def R(self, sensor_id: str) -> np.ndarray:
         return self.R_dict[sensor_id]
 
-    # ═════════════════════════════════════════════
-    # 🧪 BUILT-IN TESTS
-    # ═════════════════════════════════════════════
+    
 
     @staticmethod
     def run_tests():
