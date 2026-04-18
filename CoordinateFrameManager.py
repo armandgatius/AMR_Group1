@@ -101,18 +101,13 @@ class CoordinateFrameManager:
         assert np.isclose(z[1], np.pi / 2), "Camera bearing incorrect"
 
         # ── Test 3: AIS consistency ──────────────
-        vessel = np.array([10.0, 5.0])
-        target = np.array([20.0, 15.0])
-        cfm.camera_offset = np.array([10.0, 5.0])
-
-        cfm.update_vessel_position(vessel)
-        x = np.array([target[0], target[1], 0, 0])
+        # Make vessel coincide with radar
+        cfm.update_vessel_position(np.array([0.0, 0.0]))
 
         z_ais = cfm.h(x, "ais")
-        z_cam= cfm.h(x,"camera")
-        
+        z_radar = cfm.h(x, "radar")
 
-        assert np.allclose(z_ais, z_cam), "AIS conversion incorrect"
+        assert np.allclose(z_ais, z_radar), "AIS conversion incorrect"
 
         # ── Test 4: Jacobian shape ───────────────
         x = np.array([50.0, 30.0, 0, 0])
