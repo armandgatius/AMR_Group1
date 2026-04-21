@@ -13,7 +13,7 @@ from pathlib import Path
 
 import numpy as np
 
-from CoordinateFrameManager import CoordinateFrameManager
+from T2_CoordinateFrameManager import CoordinateFrameManager
 from T3_single_sensor_tracker import RadarEKFTracker, wrap_angle, load_scenario
 
 

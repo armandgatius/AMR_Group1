@@ -2,7 +2,7 @@
 
 This module provides a compact constant-velocity EKF implementation for the
 radar-only phase of the harbour tracking project. It uses the existing
-CoordinateFrameManager for the radar measurement model.
+T2_CoordinateFrameManager for the radar measurement model.
 
 Includes Scenario A validation: NIS consistency test and RMSE evaluation.
 """
@@ -15,7 +15,7 @@ from pathlib import Path
 
 import numpy as np
 
-from CoordinateFrameManager import CoordinateFrameManager
+from T2_CoordinateFrameManager import CoordinateFrameManager
 
 
 def wrap_angle(angle: float) -> float:
