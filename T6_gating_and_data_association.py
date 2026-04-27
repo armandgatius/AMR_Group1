@@ -7,10 +7,8 @@ from T5_ais_fusion import AISFusionTracker
 from T3_single_sensor_tracker import load_scenario
 
 
-# ============================================================
-# SPLIT MEASUREMENTS (SAFE)
-# ============================================================
 
+# SPLIT MEASUREMENTS
 def _split_measurements(measurements):
     result = {"radar": [], "camera": [], "ais": [], "gnss": []}
 
@@ -74,8 +72,6 @@ class TrackWrapper:
 
 
 # MULTI TARGET TRACKER
-
-
 class MultiTargetTracker:
 
     def __init__(self, cfm):
@@ -161,7 +157,6 @@ class MultiTargetTracker:
 
 
 # EVALUATION (MOTP + CE + swap proxy)
-
 def evaluate_scenario_d(mtt):
 
     if len(mtt.tracks) == 0:
@@ -194,10 +189,8 @@ def evaluate_scenario_d(mtt):
         print("STATUS: FAIL ✗ (possible swaps / loss)")
 
 
-# ============================================================
-# RUNNER
-# ============================================================
 
+# RUNNER
 def run_scenario_d(json_path):
 
     scenario = load_scenario(json_path)
@@ -230,10 +223,7 @@ def run_scenario_d(json_path):
     evaluate_scenario_d(mtt)
 
 
-# ============================================================
 # MAIN
-# ============================================================
-
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         json_path = sys.argv[1]
