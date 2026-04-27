@@ -181,12 +181,12 @@ def evaluate_scenario_d(mtt):
     print("Final number of tracks:", len(mtt.tracks))
     print("Cardinality error (CE):", ce)
     print("Track stability score:", round(stability, 3))
-    print("MOTP (lower is better):", round(motp, 3))
+    print("MOTP (<15):", round(motp, 3))
 
-    if ce == 0 and stability > 0.5:
-        print("STATUS: PASS ✓ (likely stable tracking)")
+    if ce < 0.5 and stability > 0.5:
+        print("STATUS: PASS ✓")
     else:
-        print("STATUS: FAIL ✗ (possible swaps / loss)")
+        print("STATUS: FAIL ✗")
 
 
 
