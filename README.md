@@ -1,0 +1,16 @@
+This multi-target tracking system combines Mahalanobis-distance gating with Global Nearest Neighbour (GNN) data association to track multiple objects simultaneously using radar and camera measurements. For each track and sensor, measurements are first filtered using a statistical gate based on the Mahalanobis distance, where a detection is accepted if its distance to the predicted measurement is below a threshold derived from the χ² distribution with probability P=0.99. This step reduces the number of unlikely associations and improves robustness under clutter.
+
+All gated measurements from all sensors are then combined into a single association problem. A cost matrix is constructed where each entry represents the Mahalanobis distance between a track and a measurement, and invalid associations (outside the gate) are assigned a large cost. The Hungarian algorithm is used to compute the optimal one-to-one assignment between tracks and measurements. Tracks that are not assigned receive a missed-detection flag, while unassigned measurements are considered for track initiation.
+
+Track management includes initiation, confirmation, and deletion. New tracks are created from unassigned measurements unless the measurement lies within the gate of a track that has already been assigned in the same scan, which prevents duplicate track creation. Tracks are confirmed after a fixed number of successful updates and deleted after a number of consecutive missed detections, with different thresholds for tentative and confirmed tracks. Additionally, nearby tracks are merged to further reduce duplication.
+
+
+The system is validated through several tests designed to assess gating performance, data association accuracy, and overall tracking quality in a multi-target scenario.
+
+First, gating is validated by checking that each track gate contains at most one true detection and by computing an empirical gate inclusion rate. This verifies that the Mahalanobis gating is neither too strict (missing true detections) nor too loose (allowing excessive clutter).
+
+Second, data association is evaluated by detecting two types of errors. A missed association occurs when a track is not assigned a measurement even though a true detection for that target exists in the scan. An identity swap occurs when a track is assigned a measurement originating from a different target, which is especially critical during the crossing interval. Identity swaps are counted to assess how well the tracker preserves target identity.
+
+Third, the system is evaluated using the OSPA metric, which measures both localization accuracy and the correctness of the number of tracked targets. The mean OSPA is computed during the crossing period and after it, with the requirement that it remains below 40 m.
+
+Finally, track-level performance is assessed by verifying that all targets are successfully tracked throughout the scenario. This includes checking that all tracks are confirmed, maintained during the crossing, and that the final position error of each track relative to the ground truth remains below a defined threshold.
