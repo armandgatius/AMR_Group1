@@ -90,57 +90,69 @@ class RadarCameraFusionTracker(RadarEKFTracker):
 # Scenario B validation
 # ---------------------------------------------------------------------------
 
-def _build_cfm() -> CoordinateFrameManager:
+def _build_cfm(sensor_configs: dict | None = None) -> CoordinateFrameManager:
+    radar_cfg = (sensor_configs or {}).get("radar", {})
+    camera_cfg = (sensor_configs or {}).get("camera", {})
+
+    radar_sigma_r = float(radar_cfg.get("sigma_r_m", 5.0))
+    radar_sigma_phi = np.deg2rad(float(radar_cfg.get("sigma_phi_deg", 0.3)))
+    camera_sigma_r = float(camera_cfg.get("sigma_r_m", 8.0))
+    camera_sigma_phi = np.deg2rad(float(camera_cfg.get("sigma_phi_deg", 0.15)))
+    camera_offset = np.array(
+        camera_cfg.get("pos_ned", [-80.0, 120.0]),
+        dtype=float,
+    )
+
     cfm = CoordinateFrameManager(
-        camera_offset=np.array([-80.0, 120.0], dtype=float),
-        radar_R=np.diag([6.0**2, np.deg2rad(0.35) ** 2]),
-        camera_R=np.diag([8.0**2, np.deg2rad(0.15) ** 2]),
+        camera_offset=camera_offset,
+        radar_R=np.diag([radar_sigma_r**2, radar_sigma_phi**2]),
+        camera_R=np.diag([camera_sigma_r**2, camera_sigma_phi**2]),
         ais_R=np.eye(2),
     )
     cfm.update_vessel_position(np.array([0.0, 0.0], dtype=float))
     return cfm
 
 
-def _split_by_sensor(measurements: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Return true radar and true camera measurements, sorted by time."""
-    radar = sorted(
-        [m for m in measurements if m["sensor_id"] == "radar" and not m["is_false_alarm"]],
-        key=lambda m: m["time"],
-    )
-    camera = sorted(
-        [m for m in measurements if m["sensor_id"] == "camera" and not m["is_false_alarm"]],
-        key=lambda m: m["time"],
-    )
-    return radar, camera
+def _group_measurements_by_time(measurements: list[dict]) -> dict[float, dict[str, np.ndarray]]:
+    """Return true radar/camera measurements grouped by their real timestamp."""
+    grouped: dict[float, dict[str, np.ndarray]] = {}
+
+    for m in measurements:
+        sensor_id = m["sensor_id"]
+        if sensor_id not in ("radar", "camera") or m["is_false_alarm"]:
+            continue
+
+        grouped.setdefault(float(m["time"]), {})[sensor_id] = np.array(
+            [m["range_m"], m["bearing_rad"]],
+            dtype=float,
+        )
+
+    return grouped
 
 
-def _nearest_camera(
-    camera_meas: list[dict],
-    t: float,
-    window: float = 5.0,
-) -> np.ndarray | None:
-    """Return the camera measurement closest to time t within ±window."""
-    best = None
-    best_dt = float("inf")
+def _nis_fraction_in_bounds(values: list[float], dof: int) -> float:
+    """Fraction of NIS values inside the 95% chi-square consistency bounds."""
+    if not values:
+        return float("nan")
 
-    for m in camera_meas:
-        dt = abs(m["time"] - t)
-        if dt <= window and dt < best_dt:
-            best_dt = dt
-            best = m
-
-    if best is None:
-        return None
-
-    return np.array([best["range_m"], best["bearing_rad"]], dtype=float)
+    # Precomputed chi-square 2.5% and 97.5% quantiles for the dimensions used here.
+    bounds = {
+        2: (0.0506, 5.991),
+        4: (0.711, 9.488),
+    }
+    lo, hi = bounds[dof]
+    arr = np.array(values)
+    return float(np.mean((arr >= lo) & (arr <= hi)))
 
 
 def run_scenario_b(json_path: str | Path, warmup_scans: int = 0) -> dict:
     """
     Run both fusion architectures on Scenario B.
 
-    As in T3, the first radar scan is used only for initialisation.
-    Metrics are collected from subsequent radar-driven updates.
+    The radar and camera are asynchronous, so validation is event-driven:
+    the EKF predicts to each real sensor timestamp and updates with the
+    measurement(s) available at exactly that time. A centralised 4D update is
+    only performed when radar and camera are simultaneous.
     """
     scenario = load_scenario(json_path)
 
@@ -148,47 +160,49 @@ def run_scenario_b(json_path: str | Path, warmup_scans: int = 0) -> dict:
     gt_lookup = {rec[0]: np.array(rec[1:], dtype=float) for rec in gt_records}
     gt_times = np.array(sorted(gt_lookup.keys()))
 
-    radar_meas, camera_meas = _split_by_sensor(scenario["measurements"])
-
-    chi2_lo2, chi2_hi2 = 0.0506, 5.991
-    chi2_lo4, chi2_hi4 = 0.711, 9.488
+    measurements_by_time = _group_measurements_by_time(scenario["measurements"])
 
     results = {}
 
     for architecture in ("sequential", "centralised"):
-        cfm = _build_cfm()
+        cfm = _build_cfm(scenario.get("sensor_configs"))
         tracker: RadarCameraFusionTracker | None = None
         prev_time: float | None = None
-        scan_count = 0
 
         rmse_sq: list[float] = []
         nis_radar: list[float] = []
         nis_camera: list[float] = []
-        nis_joint: list[float] = []
+        nis_centralised_2d: list[float] = []
+        nis_centralised_4d: list[float] = []
         scans_with_camera = 0
+        update_count = 0
 
-        for meas in radar_meas:
-            t = meas["time"]
-            z_r = np.array([meas["range_m"], meas["bearing_rad"]], dtype=float)
-            z_c = _nearest_camera(camera_meas, t)
+        for t in sorted(measurements_by_time):
+            measurements = measurements_by_time[t]
+            z_r = measurements.get("radar")
+            z_c = measurements.get("camera")
 
             if tracker is None:
+                z0 = z_r if z_r is not None else z_c
+                if z0 is None:
+                    continue
                 tracker = RadarCameraFusionTracker.from_detection(
-                    cfm, range_m=z_r[0], bearing_rad=z_r[1]
+                    cfm, range_m=z0[0], bearing_rad=z0[1]
                 )
                 prev_time = t
-                scan_count = 1
+                continue
+
+            if prev_time is None:
+                prev_time = t
                 continue
 
             dt = t - prev_time
             prev_time = t
-            scan_count += 1
 
             tracker.predict(dt)
+            update_count += 1
 
-            # Match T3 convention exactly: exclude first `warmup_scans`
-            # updates after initialisation.
-            if (scan_count - 2) < warmup_scans:
+            if update_count <= warmup_scans:
                 continue
 
             if architecture == "sequential":
@@ -203,7 +217,10 @@ def run_scenario_b(json_path: str | Path, warmup_scans: int = 0) -> dict:
             else:
                 nis = tracker.update_centralised(z_r, z_c)
                 if nis is not None:
-                    nis_joint.append(nis)
+                    if z_r is not None and z_c is not None:
+                        nis_centralised_4d.append(nis)
+                    else:
+                        nis_centralised_2d.append(nis)
                 if z_c is not None:
                     scans_with_camera += 1
 
@@ -215,19 +232,35 @@ def run_scenario_b(json_path: str | Path, warmup_scans: int = 0) -> dict:
         rmse = float(np.sqrt(np.mean(rmse_sq))) if rmse_sq else float("nan")
 
         if architecture == "sequential":
-            nr = np.array(nis_radar)
-            nc = np.array(nis_camera)
             results["sequential"] = {
                 "rmse_m": rmse,
-                "nis_frac_radar": float(np.mean((nr >= chi2_lo2) & (nr <= chi2_hi2))) if len(nr) else float("nan"),
-                "nis_frac_camera": float(np.mean((nc >= chi2_lo2) & (nc <= chi2_hi2))) if len(nc) else float("nan"),
+                "nis_frac_radar": _nis_fraction_in_bounds(nis_radar, dof=2),
+                "nis_frac_camera": _nis_fraction_in_bounds(nis_camera, dof=2),
                 "scans_with_camera": scans_with_camera,
             }
         else:
-            nj = np.array(nis_joint)
+            nis_frac_2d = _nis_fraction_in_bounds(nis_centralised_2d, dof=2)
+            nis_frac_4d = _nis_fraction_in_bounds(nis_centralised_4d, dof=4)
+            consistent_count = 0.0
+            total_nis_count = 0
+            if nis_centralised_2d:
+                consistent_count += nis_frac_2d * len(nis_centralised_2d)
+                total_nis_count += len(nis_centralised_2d)
+            if nis_centralised_4d:
+                consistent_count += nis_frac_4d * len(nis_centralised_4d)
+                total_nis_count += len(nis_centralised_4d)
+            centralised_consistent = (
+                consistent_count / total_nis_count
+                if total_nis_count
+                else float("nan")
+            )
+
             results["centralised"] = {
                 "rmse_m": rmse,
-                "nis_frac_joint": float(np.mean((nj >= chi2_lo4) & (nj <= chi2_hi4))) if len(nj) else float("nan"),
+                "nis_frac_all": centralised_consistent,
+                "nis_frac_single_sensor": nis_frac_2d,
+                "nis_frac_joint": nis_frac_4d,
+                "joint_updates": len(nis_centralised_4d),
                 "scans_with_camera": scans_with_camera,
             }
 
@@ -245,7 +278,10 @@ def print_scenario_b_results(results: dict) -> None:
     print(f"{'Position RMSE (m)':<38} {seq['rmse_m']:>10.2f} {cen['rmse_m']:>10.2f}")
     print(f"{'NIS in bounds — radar chi2(2) (%)':<38} {seq['nis_frac_radar']*100:>10.1f} {'—':>10}")
     print(f"{'NIS in bounds — camera chi2(2) (%)':<38} {seq['nis_frac_camera']*100:>10.1f} {'—':>10}")
+    print(f"{'NIS in bounds — central all (%)':<38} {'—':>10} {cen['nis_frac_all']*100:>10.1f}")
+    print(f"{'NIS in bounds — central chi2(2) (%)':<38} {'—':>10} {cen['nis_frac_single_sensor']*100:>10.1f}")
     print(f"{'NIS in bounds — joint chi2(4) (%)':<38} {'—':>10} {cen['nis_frac_joint']*100:>10.1f}")
+    print(f"{'True joint radar+camera updates':<38} {'—':>10} {cen['joint_updates']:>10}")
     print(f"{'Scans with camera data':<38} {seq['scans_with_camera']:>10} {cen['scans_with_camera']:>10}")
     print("-" * 60)
 
@@ -265,7 +301,8 @@ def print_scenario_b_results(results: dict) -> None:
     print(f"  Architecture difference      : {'CLEAR' if delta > 0.5 else 'NEGLIGIBLE'}")
     print(f"  NIS radar (seq)              : {nis_label(seq['nis_frac_radar'])}")
     print(f"  NIS camera (seq)             : {nis_label(seq['nis_frac_camera'])}")
-    print(f"  NIS joint (cen)              : {nis_label(cen['nis_frac_joint'])}")
+    print(f"  NIS centralised overall      : {nis_label(cen['nis_frac_all'])}")
+    print(f"  NIS centralised joint only   : {nis_label(cen['nis_frac_joint'], borderline=0.85)}")
     print("=" * 60)
 
 
