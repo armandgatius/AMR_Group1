@@ -14,16 +14,18 @@ from T6_gating_data_association import (
 )
 from T2_CoordinateFrameManager import CoordinateFrameManager
 
+# CONFIRMATION_M = 5 # FOR REAL SCENARIO
 
-CONFIRMATION_M = 3
+CONFIRMATION_M = 5
 CONFIRMATION_N = 5
 
 M_DELETE_CONFIRMED = 5
 M_DELETE_TENTATIVE = 4
-M_DELETE_EKF_TENT = 5
-PRE_GATE_M = 50.0
-OSPA_GRACE_SCANS = 10   # scans to skip before checking per-scan OSPA limit
-MOTP_MAX_DIST = 100.0   # distance threshold: pairs beyond this don't count in MOTP
+M_DELETE_EKF_TENT  = 5
+PRE_GATE_M         = 25.0   # = 25 FOR REAL SCENARIO
+MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn)
+OSPA_GRACE_SCANS   = 10     # scans to skip before checking per-scan OSPA limit
+MOTP_MAX_DIST      = 100.0  # distance threshold: pairs beyond this don't count in MOTP
 
 class TentativeTrack:
     """Pre-EKF buffer: collects NED positions until velocity can be estimated."""
@@ -40,7 +42,11 @@ class TentativeTrack:
         self.missed = 0
 
     def ready_to_initialize(self):
-        return len(self.detections) >= 2 and self.timestamps[-1] > self.timestamps[0]
+        if len(self.detections) < 2 or self.timestamps[-1] <= self.timestamps[0]:
+            return False
+        dt    = self.timestamps[-1] - self.timestamps[0]
+        speed = float(np.linalg.norm(self.detections[-1] - self.detections[0]) / dt)
+        return speed < MAX_INIT_SPEED_MS
 
     def initialize_state_and_covariance(self):
         z1, z2 = self.detections[0], self.detections[-1]

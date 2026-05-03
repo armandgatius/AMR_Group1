@@ -50,12 +50,12 @@ def wrap_angle(a):
 
 
 def mahalanobis_d2(meas, z_pred, S, wrap_bearing=True):
-    y = (meas - z_pred).reshape(-1, 1)
+    y = (meas - z_pred).flatten()
 
     if wrap_bearing:
         y[1] = wrap_angle(y[1])
 
-    return float(y.T @ np.linalg.solve(S, y))
+    return float(y @ np.linalg.solve(S, y))
 
 
 def gating(
