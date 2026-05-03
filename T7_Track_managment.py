@@ -16,14 +16,14 @@ from T2_CoordinateFrameManager import CoordinateFrameManager
 
 # CONFIRMATION_M = 5 # FOR REAL SCENARIO
 
-CONFIRMATION_M = 5
+CONFIRMATION_M = 3  # 3 for simulation, 5 for real scenario 
 CONFIRMATION_N = 5
 
 M_DELETE_CONFIRMED = 5
 M_DELETE_TENTATIVE = 4
 M_DELETE_EKF_TENT  = 5
-PRE_GATE_M         = 25.0   # = 25 FOR REAL SCENARIO
-MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn)
+PRE_GATE_M         = 25.0   # = 25 FOR REAL SCENARIO,50 FOR SIMULATION
+MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn), 25 FOR SIMUALTION 
 OSPA_GRACE_SCANS   = 10     # scans to skip before checking per-scan OSPA limit
 MOTP_MAX_DIST      = 100.0  # distance threshold: pairs beyond this don't count in MOTP
 
