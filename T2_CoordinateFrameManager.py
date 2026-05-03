@@ -77,7 +77,21 @@ class CoordinateFrameManager:
     def R(self, sensor_id: str) -> np.ndarray:
         return self.R_dict[sensor_id]
 
-    
+    def polar_to_ned(self, range_m: float, bearing_rad: float, sensor_id: str) -> np.ndarray:
+        """Convert a (range, bearing) measurement to NED position."""
+        s = self.get_sensor_position(sensor_id)
+        return np.array([s[0] + range_m * np.cos(bearing_rad),
+                          s[1] + range_m * np.sin(bearing_rad)], dtype=float)
+
+    def R_cartesian(self, ned_pos: np.ndarray, sensor_id: str) -> np.ndarray:
+        """Linearise the sensor's polar noise matrix into Cartesian (NED) space."""
+        x = np.array([ned_pos[0], ned_pos[1], 0.0, 0.0])
+        try:
+            J     = self.H(x, sensor_id)[:, :2]
+            J_inv = np.linalg.inv(J)
+            return J_inv @ self.R(sensor_id) @ J_inv.T
+        except (ValueError, np.linalg.LinAlgError):
+            return np.eye(2) * 100.0
 
     @staticmethod
     def run_tests():
