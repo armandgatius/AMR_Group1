@@ -150,7 +150,8 @@ def _build_cfm_c() -> CoordinateFrameManager:
 
     cfm = CoordinateFrameManager(
         camera_offset=np.array([-80.0, 120.0], dtype=float),
-        radar_R=np.diag([5.0 ** 2, np.deg2rad(0.3) ** 2]),
+        radar_R=np.diag([7.0 ** 2, np.deg2rad(0.3) ** 2]),  # tuned for NIS consistency on Scenario C
+        #radar_R=np.diag([5.0 ** 2, np.deg2rad(0.3) ** 2]),
         camera_R=np.diag([8.0 ** 2, np.deg2rad(0.15) ** 2]),
         ais_R=np.diag([AIS_SIGMA_POS ** 2, AIS_SIGMA_BEARING ** 2]),
     )
@@ -284,6 +285,8 @@ def run_scenario_c(
                     north_m=event["north_m"],
                     east_m=event["east_m"],
                     t=t,
+                    config=EKFConfig(sigma_a=0.05),
+
                 )
                 continue
 
@@ -300,7 +303,9 @@ def run_scenario_c(
 
         if tracker is None:
             tracker = AISFusionTracker.from_detection_at_time(
-                cfm, range_m=z_r[0], bearing_rad=z_r[1], t=t
+                cfm, range_m=z_r[0], bearing_rad=z_r[1], t=t,
+                config=EKFConfig(sigma_a=0.05),
+
             )
             prev_radar_time = t
             scan_count = 1
