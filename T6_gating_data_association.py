@@ -377,10 +377,13 @@ class MultiTargetTracker:
                 meas_array = all_ais
                 meas_dict = ais_meas[local_idx]
 
-            self.trackers[tid].update(
-                meas_array[local_idx],
-                sensor_id=sensor_id,
-            )
+            if sensor_id == "ais":
+                self.trackers[tid].update_ned(meas_array[local_idx])
+            else:
+                self.trackers[tid].update(
+                    meas_array[local_idx],
+                    sensor_id=sensor_id,
+                )
 
             if (
                 not meas_dict.get("is_false_alarm", False)

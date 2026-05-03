@@ -97,6 +97,21 @@ class AISFusionTracker(RadarCameraFusionTracker):
         tracker.last_time = t
         return tracker
 
+    def update_ned(self, z_ned: np.ndarray) -> float:
+        """EKF update with a direct NED Cartesian position measurement (no predict).
+
+        Used by the multi-target tracker (T6) 
+        """
+        H = np.array([[1., 0., 0., 0.],
+                      [0., 1., 0., 0.]])
+        residual = np.asarray(z_ned, dtype=float) - self.x[:2]
+        R = self.cfm.R("ais")
+        S = H @ self.P @ H.T + R
+        K = self.P @ H.T @ np.linalg.inv(S)
+        self.x = self.x + K @ residual
+        self.P = (np.eye(4) - K @ H) @ self.P
+        return float(residual @ np.linalg.inv(S) @ residual)
+
     def update_ais_async(self, north_m: float, east_m: float, t: float) -> float:
         """Predict to the AIS report time, then update with the AIS position.
 
