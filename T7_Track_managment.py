@@ -14,15 +14,18 @@ from T6_gating_data_association import (
 )
 from T2_CoordinateFrameManager import CoordinateFrameManager
 
+# set True for simulation, False for real data
+SIMULATION_MODE = True
+
 # CONFIRMATION_M = 5 # FOR REAL SCENARIO
 
-CONFIRMATION_M = 10 # 3 for simulation, 5 for real scenario 
-CONFIRMATION_N = 12
+CONFIRMATION_M = 2 # 3 for simulation, 5 for real scenario
+CONFIRMATION_N = 5
 
 M_DELETE_CONFIRMED = 6
 M_DELETE_TENTATIVE = 4
 M_DELETE_EKF_TENT  = 4
-PRE_GATE_M         = 25.0   # = 25 FOR REAL SCENARIO,50 FOR SIMULATION
+PRE_GATE_M         = 50.0   # = 25 FOR REAL SCENARIO,50 FOR SIMULATION
 MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn), 25 FOR SIMUALTION 
 OSPA_GRACE_SCANS   = 10     # scans to skip before checking per-scan OSPA limit
 MOTP_MAX_DIST      = 100.0  # distance threshold: pairs beyond this don't count in MOTP
@@ -244,6 +247,9 @@ class TrackManager(MultiTargetTracker):
         return float(self.prev_times[tid] - self._track_start_times[tid])
 
     def _has_confirmation_motion_or_ais(self, tid):
+        if SIMULATION_MODE:
+            return True
+
         if self._has_ais_support(tid):
             return True
 
@@ -632,8 +638,8 @@ class TrackManager(MultiTargetTracker):
             if pt.missed < M_DELETE_TENTATIVE
         ]
 
-        self._delete_static_clutter_tracks(t)
-        self._delete_short_fragment_tracks(t)
+        # self._delete_static_clutter_tracks(t)
+        # self._delete_short_fragment_tracks(t)
         self._delete_tracks_with_excessive_misses(t)
         self._merge_duplicates()
 
@@ -955,7 +961,7 @@ if __name__ == "__main__":
 
 
     test_gating_scenario(
-        "harbour_sim_output/scenario_D.json",
+        "harbour_sim_output/scenario_E.json",
         ospa_limit=50.0,
     )
     
