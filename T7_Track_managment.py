@@ -16,12 +16,12 @@ from T2_CoordinateFrameManager import CoordinateFrameManager
 
 # CONFIRMATION_M = 5 # FOR REAL SCENARIO
 
-CONFIRMATION_M = 3  # 3 for simulation, 5 for real scenario 
-CONFIRMATION_N = 5
+CONFIRMATION_M = 10 # 3 for simulation, 5 for real scenario 
+CONFIRMATION_N = 12
 
-M_DELETE_CONFIRMED = 5
+M_DELETE_CONFIRMED = 6
 M_DELETE_TENTATIVE = 4
-M_DELETE_EKF_TENT  = 5
+M_DELETE_EKF_TENT  = 4
 PRE_GATE_M         = 25.0   # = 25 FOR REAL SCENARIO,50 FOR SIMULATION
 MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn), 25 FOR SIMUALTION 
 OSPA_GRACE_SCANS   = 10     # scans to skip before checking per-scan OSPA limit
@@ -67,7 +67,7 @@ class TentativeTrack:
         )
 
         P0 = np.zeros((4, 4))
-        P0[0:2, 0:2] = 200 * np.eye(2)
+        P0[0:2, 0:2] = self.sensor_R[:2, :2]
         P0[2, 2] = 2.0 * self.sensor_R[0, 0] / dt**2
         P0[3, 3] = 2.0 * self.sensor_R[1, 1] / dt**2
 
@@ -378,104 +378,104 @@ class TrackManager(MultiTargetTracker):
         return result
 
 
-def assert_end_of_run(
-    tm,
-    target_ids,
-    data,
-    ospa_crossing,
-    ospa_post,
-    motp_distances,
-    motp_matches,
-    identity_swap,
-    ce_series,
-    motp_series,
-):
-    confirmed = tm.confirmed_tracks
-    n_confirmed = len(confirmed)
-    n_gt = len(target_ids)
-    ce_final = abs(n_confirmed - n_gt)
+    def assert_end_of_run(
+        self,
+        target_ids,
+        data,
+        ospa_crossing,
+        ospa_post,
+        motp_distances,
+        motp_matches,
+        identity_swap,
+        ce_series,
+        motp_series,
+    ):
+        confirmed = self.confirmed_tracks
+        n_confirmed = len(confirmed)
+        n_gt = len(target_ids)
+        ce_final = abs(n_confirmed - n_gt)
 
-    mean_ce = float(np.mean(ce_series)) if ce_series else float("nan")
+        mean_ce = float(np.mean(ce_series)) if ce_series else float("nan")
 
-    print(f"\nCE time series (per scan): {[int(v) for v in ce_series]}")
-    print(f"Mean CE (full run): {mean_ce:.3f}")
-    print(f"Final CE: {ce_final}  (confirmed={n_confirmed}, expected={n_gt})")
+        print(f"\nCE time series (per scan): {[int(v) for v in ce_series]}")
+        print(f"Mean CE (full run): {mean_ce:.3f}")
+        print(f"Final CE: {ce_final}  (confirmed={n_confirmed}, expected={n_gt})")
 
-    assert mean_ce <= 1.0, (
-        f"Mean CE {mean_ce:.3f} > 1.0 -- poor cardinality throughout run"
-    )
-
-    assert ce_final <= 1, f"Cardinality error {ce_final} > 1"
-
-    if confirmed:
-        est_final = np.array(
-            [trk.get_state()[:2] for trk in confirmed.values()]
+        assert mean_ce <= 0.5, (
+            f"Mean CE {mean_ce:.3f} > 1.0 -- poor cardinality throughout run"
         )
 
-        gt_final = np.array(
-            [
+        assert ce_final <= 1, f"Cardinality error {ce_final} > 1"
+
+        if confirmed:
+            est_final = np.array(
+                [trk.get_state()[:2] for trk in confirmed.values()]
+            )
+
+            gt_final = np.array(
                 [
-                    data["ground_truth"][str(tid)][-1][1],
-                    data["ground_truth"][str(tid)][-1][2],
+                    [
+                        data["ground_truth"][str(tid)][-1][1],
+                        data["ground_truth"][str(tid)][-1][2],
+                    ]
+                    for tid in target_ids
                 ]
-                for tid in target_ids
-            ]
-        )
+            )
 
-        D = np.linalg.norm(est_final[:, None] - gt_final[None, :], axis=2)
-        r_ind, c_ind = linear_sum_assignment(D)
+            D = np.linalg.norm(est_final[:, None] - gt_final[None, :], axis=2)
+            r_ind, c_ind = linear_sum_assignment(D)
 
-        print("\nFinal position RMSE (confirmed track -> nearest GT target):")
+            print("\nFinal position RMSE (confirmed track -> nearest GT target):")
 
-        for ri, ci in zip(r_ind, c_ind):
-            rmse = D[ri, ci]
+            for ri, ci in zip(r_ind, c_ind):
+                rmse = D[ri, ci]
+                print(
+                    f"  confirmed track -> GT {target_ids[ci]}: "
+                    f"RMSE = {rmse:.2f} m"
+                )
+
+                assert rmse < 20.0, (
+                    f"Final RMSE {rmse:.2f} m > 20 m -- track lost"
+                )
+
+        if ospa_crossing:
+            mean_ospa_crossing = float(np.mean(ospa_crossing))
             print(
-                f"  confirmed track -> GT {target_ids[ci]}: "
-                f"RMSE = {rmse:.2f} m"
+                f"\nMean OSPA during crossing (48-72s): "
+                f"{mean_ospa_crossing:.2f} m"
             )
 
-            assert rmse < 20.0, (
-                f"Final RMSE {rmse:.2f} m > 20 m -- track lost"
+            assert mean_ospa_crossing < 40.0, (
+                f"Mean OSPA crossing {mean_ospa_crossing:.2f} m > 40 m"
             )
 
-    if ospa_crossing:
-        mean_ospa_crossing = float(np.mean(ospa_crossing))
-        print(
-            f"\nMean OSPA during crossing (48-72s): "
-            f"{mean_ospa_crossing:.2f} m"
-        )
+        if ospa_post:
+            mean_ospa_post = float(np.mean(ospa_post))
+            print(f"Mean OSPA after crossing (>72s):   {mean_ospa_post:.2f} m")
 
-        assert mean_ospa_crossing < 40.0, (
-            f"Mean OSPA crossing {mean_ospa_crossing:.2f} m > 40 m"
-        )
+            assert mean_ospa_post < 40.0, (
+                f"Mean OSPA post {mean_ospa_post:.2f} m > 40 m"
+            )
 
-    if ospa_post:
-        mean_ospa_post = float(np.mean(ospa_post))
-        print(f"Mean OSPA after crossing (>72s):   {mean_ospa_post:.2f} m")
+        if motp_series:
+            print(
+                f"\nMOTP time series (per scan, m): "
+                f"{[f'{v:.1f}' for v in motp_series]}"
+            )
 
-        assert mean_ospa_post < 40.0, (
-            f"Mean OSPA post {mean_ospa_post:.2f} m > 40 m"
-        )
+        if motp_matches > 0:
+            motp_scalar = float(np.sum(motp_distances) / motp_matches)
+            print(f"Mean MOTP (full run): {motp_scalar:.2f} m")
 
-    if motp_series:
-        print(
-            f"\nMOTP time series (per scan, m): "
-            f"{[f'{v:.1f}' for v in motp_series]}"
-        )
+            assert motp_scalar < 15.0, (
+                f"MOTP {motp_scalar:.2f} m > 40 m -- localisation too poor"
+            )
 
-    if motp_matches > 0:
-        motp_scalar = float(np.sum(motp_distances) / motp_matches)
-        print(f"Mean MOTP (full run): {motp_scalar:.2f} m")
-
-        assert motp_scalar < 40.0, (
-            f"MOTP {motp_scalar:.2f} m > 40 m -- localisation too poor"
-        )
-
-    if identity_swap > 0:
-        print(f"\nIdentity swaps detected: {identity_swap}")
-        assert False, (
-            f"{identity_swap} identity swaps detected -- check associations"
-        )
+        if identity_swap > 0:
+            print(f"\nIdentity swaps detected: {identity_swap}")
+            assert False, (
+                f"{identity_swap} identity swaps detected -- check associations"
+            )
 
 
 def test_gating_scenario(
@@ -649,33 +649,46 @@ def test_gating_scenario(
     mean_ospa = float(np.mean(ospa_series)) if ospa_series else float("nan")
     mean_motp = float(np.mean(motp_distances)) if motp_distances else float("nan")
 
-    print(f"\nScenario: {json_path}")
-    print(f"CE time series: {[int(v) for v in ce_series]}")
-    print(f"Mean CE: {mean_ce:.3f}")
+    # print(f"\nScenario: {json_path}")
+    # print(f"CE time series: {[int(v) for v in ce_series]}")
+    # print(f"Mean CE: {mean_ce:.3f}")
 
-    print(f"\nOSPA time series: {[f'{v:.1f}' for v in ospa_series]}")
-    print(f"Mean OSPA: {mean_ospa:.2f} m")
+    # print(f"\nOSPA time series: {[f'{v:.1f}' for v in ospa_series]}")
+    # print(f"Mean OSPA: {mean_ospa:.2f} m")
 
-    print(f"\nMOTP time series: {[f'{v:.1f}' for v in motp_series]}")
-    print(f"Mean MOTP: {mean_motp:.2f} m")
+    # print(f"\nMOTP time series: {[f'{v:.1f}' for v in motp_series]}")
+    # print(f"Mean MOTP: {mean_motp:.2f} m")
 
-    assert mean_ce <= 1.0, f"Mean CE {mean_ce:.3f} > 1.0"
-    ospa_steady = ospa_series[OSPA_GRACE_SCANS:]
-    if ospa_steady:
-        mean_ospa_steady = float(np.mean(ospa_steady))
-        print(f"Mean OSPA (after grace period): {mean_ospa_steady:.2f} m")
-        assert mean_ospa_steady < ospa_limit, (
-            f"Mean OSPA {mean_ospa_steady:.2f} m >= {ospa_limit:.1f} m after grace period"
-        )
+    # assert mean_ce <= 1.0, f"Mean CE {mean_ce:.3f} > 1.0"
+    # ospa_steady = ospa_series[OSPA_GRACE_SCANS:]
+    # if ospa_steady:
+    #     mean_ospa_steady = float(np.mean(ospa_steady))
+    #     print(f"Mean OSPA (after grace period): {mean_ospa_steady:.2f} m")
+    #     assert mean_ospa_steady < ospa_limit, (
+    #         f"Mean OSPA {mean_ospa_steady:.2f} m >= {ospa_limit:.1f} m after grace period"
+    #     )
 
-    if identity_swap > 0:
-        assert False, f"{identity_swap} identity swaps detected"
+    # if identity_swap > 0:
+    #     assert False, f"{identity_swap} identity swaps detected"
 
+    tm.assert_end_of_run(
+        target_ids=target_ids,
+        data=data,
+        ospa_crossing=ospa_series[48:73],
+        ospa_post=ospa_series[73:],
+        motp_distances=motp_distances,
+        motp_matches=motp_matches,
+        identity_swap=identity_swap,
+        ce_series=ce_series,
+        motp_series=motp_series,
+    )
+    
 
 if __name__ == "__main__":
 
 
     test_gating_scenario(
-        "harbour_sim_output/scenario_E.json",
+        "harbour_sim_output/scenario_D.json",
         ospa_limit=50.0,
     )
+    
