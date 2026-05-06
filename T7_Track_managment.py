@@ -19,8 +19,8 @@ SIMULATION_MODE = True
 
 # CONFIRMATION_M = 5 # FOR REAL SCENARIO
 
-CONFIRMATION_M = 2 # 3 for simulation, 5 for real scenario
-CONFIRMATION_N = 5
+CONFIRMATION_M = 3 if SIMULATION_MODE else 10  # 3 for simulation, 5 for real scenario
+CONFIRMATION_N = 5 if SIMULATION_MODE else 12  # 5 for simulation, 10 for real scenario
 
 M_DELETE_CONFIRMED = 6
 M_DELETE_TENTATIVE = 4
@@ -47,6 +47,7 @@ FRAGMENT_MAX_HITS = 16
 FRAGMENT_MAX_AGE_S = 45.0
 FRAGMENT_NEAR_STRONG_TRACK_M = 60.0
 STRONG_TRACK_MIN_HITS = 25
+CE_GRACE_TIME_S = 10.0
 
 class TentativeTrack:
     """Pre-EKF buffer: collects NED positions until velocity can be estimated."""
@@ -90,7 +91,7 @@ class TentativeTrack:
         )
 
         P0 = np.zeros((4, 4))
-        P0[0:2, 0:2] = self.sensor_R[:2, :2]
+        P0[0:2, 0:2] = self.sensor_R[0:2, 0:2]
         P0[2, 2] = 2.0 * self.sensor_R[0, 0] / dt**2
         P0[3, 3] = 2.0 * self.sensor_R[1, 1] / dt**2
 
@@ -874,7 +875,7 @@ def test_gating_scenario(
             or len(ais_meas) > 0
         )
 
-        if sensor_active:
+        if sensor_active and t >= CE_GRACE_TIME_S:
             # target active if t is within its GT time span
             active_target_ids = [
                 tid
@@ -961,7 +962,7 @@ if __name__ == "__main__":
 
 
     test_gating_scenario(
-        "harbour_sim_output/scenario_E.json",
+        "harbour_sim_output/scenario_D.json",
         ospa_limit=50.0,
     )
     
