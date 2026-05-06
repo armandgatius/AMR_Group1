@@ -27,18 +27,38 @@ MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn), 25 FOR SIM
 OSPA_GRACE_SCANS   = 10     # scans to skip before checking per-scan OSPA limit
 MOTP_MAX_DIST      = 100.0  # distance threshold: pairs beyond this don't count in MOTP
 
+CONFIRMED_MERGE_POS_M = 12.0
+CONFIRMED_MERGE_VEL_MS = 1.5
+CONFIRMED_PERSISTENT_MERGE_POS_M = 18.0
+CONFIRMED_PERSISTENT_MERGE_SCANS = 3
+CONFIRMED_INIT_SUPPRESS_M = 18.0
+EKF_INIT_SUPPRESS_M = 12.0
+TRACK_POSITION_HISTORY_N = 30
+NON_AIS_CONFIRM_MIN_DISPLACEMENT_M = 15.0
+NON_AIS_CONFIRM_MIN_HITS = 14
+NON_AIS_CONFIRM_MIN_AGE_S = 45.0
+STATIC_CLUTTER_MIN_HITS = 12
+STATIC_CLUTTER_MAX_DISPLACEMENT_M = 15.0
+STATIC_CLUTTER_SUPPRESS_M = 25.0
+FRAGMENT_MAX_HITS = 16
+FRAGMENT_MAX_AGE_S = 45.0
+FRAGMENT_NEAR_STRONG_TRACK_M = 60.0
+STRONG_TRACK_MIN_HITS = 25
+
 class TentativeTrack:
     """Pre-EKF buffer: collects NED positions until velocity can be estimated."""
 
-    def __init__(self, ned_pos, timestamp, sensor_R_cart):
+    def __init__(self, ned_pos, timestamp, sensor_R_cart, sensor_id):
         self.detections = [np.asarray(ned_pos, dtype=float)]
         self.timestamps = [float(timestamp)]
+        self.sensor_ids = [sensor_id]
         self.sensor_R = sensor_R_cart
         self.missed = 0
 
-    def add_detection(self, ned_pos, timestamp):
+    def add_detection(self, ned_pos, timestamp, sensor_id):
         self.detections.append(np.asarray(ned_pos, dtype=float))
         self.timestamps.append(float(timestamp))
+        self.sensor_ids.append(sensor_id)
         self.missed = 0
 
     def ready_to_initialize(self):
@@ -92,6 +112,11 @@ class TrackManager(MultiTargetTracker):
 
         self._history = {}
         self._confirmed = set()
+        self._duplicate_pair_hits = {}
+        self._sensor_hits = {}
+        self._position_history = {}
+        self._track_start_times = {}
+        self._static_clutter_points = []
 
     def _is_confirmed(self, tid):
         if tid in self._confirmed:
@@ -99,7 +124,11 @@ class TrackManager(MultiTargetTracker):
 
         history = self._history.get(tid)
 
-        if history is not None and sum(history) >= CONFIRMATION_M:
+        if (
+            history is not None
+            and sum(history) >= CONFIRMATION_M
+            and self._has_confirmation_motion_or_ais(tid)
+        ):
             self._confirmed.add(tid)
             return True
 
@@ -122,6 +151,14 @@ class TrackManager(MultiTargetTracker):
         self._history.pop(tid, None)
         self._confirmed.discard(tid)
         self._gt_label.pop(tid, None)
+        self._sensor_hits.pop(tid, None)
+        self._position_history.pop(tid, None)
+        self._track_start_times.pop(tid, None)
+        self._duplicate_pair_hits = {
+            pair: count
+            for pair, count in self._duplicate_pair_hits.items()
+            if tid not in pair
+        }
 
     def _delete_tracks_with_excessive_misses(self, t):
         for tid in list(self.trackers.keys()):
@@ -148,9 +185,142 @@ class TrackManager(MultiTargetTracker):
                 return True
 
         return False
-    
+
+    def _track_strength(self, tid):
+        P = self.trackers[tid].get_covariance()
+
+        return (
+            self._hits.get(tid, 0),
+            -self._misses.get(tid, 0),
+            -float(np.trace(P)),
+        )
+
+    def _duplicate_pair_key(self, tid_i, tid_j):
+        return tuple(sorted((tid_i, tid_j)))
+
+    def _track_near_position(self, ned_pos, max_dist, confirmed_only=False):
+        if confirmed_only:
+            tracks = self.confirmed_tracks.values()
+        else:
+            tracks = self.trackers.values()
+
+        for trk in tracks:
+            dist = float(np.linalg.norm(ned_pos - trk.get_state()[:2]))
+
+            if dist < max_dist:
+                return True
+
+        return False
+
+    def _sensor_hit_counts_from_ids(self, sensor_ids):
+        counts = {}
+
+        for sensor_id in sensor_ids:
+            counts[sensor_id] = counts.get(sensor_id, 0) + 1
+
+        return counts
+
+    def _has_ais_support(self, tid):
+        return self._sensor_hits.get(tid, {}).get("ais", 0) > 0
+
+    def _record_track_position(self, tid):
+        self._position_history.setdefault(
+            tid,
+            deque(maxlen=TRACK_POSITION_HISTORY_N),
+        ).append(self.trackers[tid].get_state()[:2].copy())
+
+    def _track_displacement(self, tid):
+        history = self._position_history.get(tid)
+
+        if history is None or len(history) < 2:
+            return 0.0
+
+        return float(np.linalg.norm(history[-1] - history[0]))
+
+    def _track_age(self, tid):
+        if tid not in self._track_start_times:
+            return 0.0
+
+        return float(self.prev_times[tid] - self._track_start_times[tid])
+
+    def _has_confirmation_motion_or_ais(self, tid):
+        if self._has_ais_support(tid):
+            return True
+
+        return (
+            self._hits.get(tid, 0) >= NON_AIS_CONFIRM_MIN_HITS
+            and self._track_age(tid) >= NON_AIS_CONFIRM_MIN_AGE_S
+            and self._track_displacement(tid) >= NON_AIS_CONFIRM_MIN_DISPLACEMENT_M
+        )
+
+    def _near_stronger_track(self, tid):
+        x = self.trackers[tid].get_state()
+
+        for other_tid, other_trk in self.trackers.items():
+            if other_tid == tid:
+                continue
+
+            if self._hits.get(other_tid, 0) < STRONG_TRACK_MIN_HITS:
+                continue
+
+            if self._hits.get(other_tid, 0) <= self._hits.get(tid, 0):
+                continue
+
+            dist = float(np.linalg.norm(x[:2] - other_trk.get_state()[:2]))
+
+            if dist < FRAGMENT_NEAR_STRONG_TRACK_M:
+                return True
+
+        return False
+
+    def _near_static_clutter(self, ned_pos):
+        return any(
+            float(np.linalg.norm(ned_pos - clutter_pos))
+            < STATIC_CLUTTER_SUPPRESS_M
+            for clutter_pos in self._static_clutter_points
+        )
+
+    def _register_static_clutter(self, ned_pos):
+        if self._near_static_clutter(ned_pos):
+            return
+
+        self._static_clutter_points.append(np.asarray(ned_pos, dtype=float).copy())
+
+    def _delete_static_clutter_tracks(self, t):
+        for tid in list(self.trackers.keys()):
+            if self._has_ais_support(tid):
+                continue
+
+            if self._hits.get(tid, 0) < STATIC_CLUTTER_MIN_HITS:
+                continue
+
+            if self._track_displacement(tid) >= STATIC_CLUTTER_MAX_DISPLACEMENT_M:
+                continue
+
+            self._register_static_clutter(self.trackers[tid].get_state()[:2])
+            print(f"t={t:.1f}s  DELETE stationary clutter track {tid}")
+            self._delete_track(tid)
+
+    def _delete_short_fragment_tracks(self, t):
+        for tid in list(self.trackers.keys()):
+            if self._has_ais_support(tid):
+                continue
+
+            if self._hits.get(tid, 0) > FRAGMENT_MAX_HITS:
+                continue
+
+            if self._track_age(tid) > FRAGMENT_MAX_AGE_S:
+                continue
+
+            if not self._near_stronger_track(tid):
+                continue
+
+            print(f"t={t:.1f}s  DELETE short fragment track {tid}")
+            self._delete_track(tid)
+
     def _merge_duplicates(self):
         gate = chi2.ppf(0.99, df=4)
+        confirmed_gate = chi2.ppf(0.95, df=4)
         tids = list(self.trackers.keys())
         to_delete = set()
 
@@ -172,9 +342,6 @@ class TrackManager(MultiTargetTracker):
 
                 conf_j = self._is_confirmed(tid_j)
 
-                if conf_i and conf_j:
-                    continue
-
                 x_j = self.trackers[tid_j].get_state()
                 P_j = self.trackers[tid_j].get_covariance()
 
@@ -185,13 +352,55 @@ class TrackManager(MultiTargetTracker):
                 except np.linalg.LinAlgError:
                     continue
 
-                if d2 >= gate:
+                pos_dist = float(np.linalg.norm(diff[:2]))
+                vel_dist = float(np.linalg.norm(diff[2:]))
+
+                if conf_i and conf_j:
+                    pair_key = self._duplicate_pair_key(tid_i, tid_j)
+
+                    immediate_duplicate = (
+                        d2 < confirmed_gate
+                        and pos_dist < CONFIRMED_MERGE_POS_M
+                        and vel_dist < CONFIRMED_MERGE_VEL_MS
+                    )
+
+                    persistent_duplicate_candidate = (
+                        pos_dist < CONFIRMED_PERSISTENT_MERGE_POS_M
+                        and (
+                            d2 < gate
+                            or pos_dist < CONFIRMED_MERGE_POS_M
+                        )
+                    )
+
+                    if persistent_duplicate_candidate:
+                        self._duplicate_pair_hits[pair_key] = (
+                            self._duplicate_pair_hits.get(pair_key, 0) + 1
+                        )
+                    else:
+                        self._duplicate_pair_hits.pop(pair_key, None)
+
+                    persistent_duplicate = (
+                        self._duplicate_pair_hits.get(pair_key, 0)
+                        >= CONFIRMED_PERSISTENT_MERGE_SCANS
+                    )
+
+                    if not immediate_duplicate and not persistent_duplicate:
+                        continue
+
+                elif d2 >= gate:
                     continue
 
                 hits_i = self._hits.get(tid_i, 0)
                 hits_j = self._hits.get(tid_j, 0)
 
-                if conf_i and not conf_j:
+                if conf_i and conf_j:
+                    if self._track_strength(tid_i) >= self._track_strength(tid_j):
+                        to_delete.add(tid_j)
+                    else:
+                        to_delete.add(tid_i)
+                        break
+
+                elif conf_i and not conf_j:
                     to_delete.add(tid_j)
 
                 elif conf_j and not conf_i:
@@ -209,9 +418,7 @@ class TrackManager(MultiTargetTracker):
             print(f"MERGE  delete duplicate track {tid}")
             self._delete_track(tid)
 
-    def process_unassigned_detection(self, detection, timestamp, sensor_id):
-        """Match detection to an existing TentativeTrack or start a new one."""
-
+    def _detection_to_ned_and_covariance(self, detection, sensor_id):
         if sensor_id == "ais":
             ned = np.array(
                 [
@@ -230,6 +437,16 @@ class TrackManager(MultiTargetTracker):
             )
             R_cart = self.cfm.R_cartesian(ned, sensor_id)
 
+        return ned, R_cart
+
+    def process_unassigned_detection(self, detection, timestamp, sensor_id):
+        """Match detection to an existing TentativeTrack or start a new one."""
+
+        ned, R_cart = self._detection_to_ned_and_covariance(
+            detection,
+            sensor_id,
+        )
+
         best_pt, best_dist = None, PRE_GATE_M
 
         for pt in self.tentative_tracks:
@@ -239,7 +456,7 @@ class TrackManager(MultiTargetTracker):
                 best_dist, best_pt = dist, pt
 
         if best_pt is not None:
-            best_pt.add_detection(ned, timestamp)
+            best_pt.add_detection(ned, timestamp, sensor_id)
 
             if best_pt.ready_to_initialize():
                 x0, P0 = best_pt.initialize_state_and_covariance()
@@ -248,12 +465,20 @@ class TrackManager(MultiTargetTracker):
                 self._hits[tid] = 2
                 self._misses[tid] = 0
                 self._history[tid] = deque([1, 1], maxlen=CONFIRMATION_N)
+                self._sensor_hits[tid] = self._sensor_hit_counts_from_ids(
+                    best_pt.sensor_ids
+                )
+                self._position_history[tid] = deque(
+                    [p.copy() for p in best_pt.detections],
+                    maxlen=TRACK_POSITION_HISTORY_N,
+                )
+                self._track_start_times[tid] = best_pt.timestamps[0]
 
                 self.tentative_tracks.remove(best_pt)
 
         else:
             self.tentative_tracks.append(
-                TentativeTrack(ned, timestamp, R_cart)
+                TentativeTrack(ned, timestamp, R_cart, sensor_id)
             )
 
             print(f"t={timestamp:.1f}s  INIT  pre_track from {sensor_id}")
@@ -272,11 +497,16 @@ class TrackManager(MultiTargetTracker):
             for track_idx, *_ in result["assignments"]
         }
 
-        for track_idx, *_ in result["assignments"]:
+        for track_idx, _global_idx, _cost, sensor_id, _local_idx in result["assignments"]:
             tid = result["active_tids"][track_idx]
 
             self._hits[tid] = self._hits.get(tid, 0) + 1
             self._misses[tid] = 0
+            self._sensor_hits.setdefault(tid, {})
+            self._sensor_hits[tid][sensor_id] = (
+                self._sensor_hits[tid].get(sensor_id, 0) + 1
+            )
+            self._record_track_position(tid)
 
             self._history.setdefault(
                 tid,
@@ -353,6 +583,41 @@ class TrackManager(MultiTargetTracker):
                 )
                 continue
 
+            if sensor_id != "ais":
+                ned, _ = self._detection_to_ned_and_covariance(
+                    detection,
+                    sensor_id,
+                )
+
+                if self._near_static_clutter(ned):
+                    print(
+                        f"t={t:.1f}s  suppress static-clutter initiation from "
+                        f"{sensor_id} idx={local_idx}"
+                    )
+                    continue
+
+                if self._track_near_position(
+                    ned,
+                    CONFIRMED_INIT_SUPPRESS_M,
+                    confirmed_only=True,
+                ):
+                    print(
+                        f"t={t:.1f}s  suppress near-confirmed initiation from "
+                        f"{sensor_id} idx={local_idx}"
+                    )
+                    continue
+
+                if self._track_near_position(
+                    ned,
+                    EKF_INIT_SUPPRESS_M,
+                    confirmed_only=False,
+                ):
+                    print(
+                        f"t={t:.1f}s  suppress near-EKF initiation from "
+                        f"{sensor_id} idx={local_idx}"
+                    )
+                    continue
+
             self.process_unassigned_detection(
                 detection=detection,
                 timestamp=t,
@@ -367,6 +632,8 @@ class TrackManager(MultiTargetTracker):
             if pt.missed < M_DELETE_TENTATIVE
         ]
 
+        self._delete_static_clutter_tracks(t)
+        self._delete_short_fragment_tracks(t)
         self._delete_tracks_with_excessive_misses(t)
         self._merge_duplicates()
 

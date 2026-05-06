@@ -29,6 +29,7 @@ RADAR_ROT  = np.deg2rad(-87.5)
 CAMERA_ROT = np.deg2rad(28)
 
 EVAL_T_END = 350.0
+AIS_MOVING_MIN_SPAN_M = 50.0
 
 # NED origin — radar/camera installation position
 ORIGIN_LAT = 55.69014690
@@ -46,12 +47,31 @@ print("Loading real data...")
 
 radar  = pd.read_csv("Experimental data/mm_wave_radar.csv")
 camera = pd.read_csv("Experimental data/camera.csv")
-ais    = pd.read_csv("Experimental data/ais.csv")
+ais_all = pd.read_csv("Experimental data/ais.csv")
 gnss   = pd.read_csv("Experimental data/gnss.csv")
+
+ais_motion = ais_all.groupby("mmsi").agg(
+    n_min=("N", "min"),
+    n_max=("N", "max"),
+    e_min=("E", "min"),
+    e_max=("E", "max"),
+)
+ais_motion["span_m"] = np.hypot(
+    ais_motion["n_max"] - ais_motion["n_min"],
+    ais_motion["e_max"] - ais_motion["e_min"],
+)
+moving_mmsi = set(
+    ais_motion[ais_motion["span_m"] >= AIS_MOVING_MIN_SPAN_M].index
+)
+ais = ais_all[ais_all["mmsi"].isin(moving_mmsi)].copy()
 
 print(f"  Radar:  {len(radar)} detections")
 print(f"  Camera: {len(camera)} detections")
-print(f"  AIS:    {len(ais)} messages from {ais['mmsi'].nunique()} unique vessels")
+print(f"  AIS:    {len(ais_all)} messages from {ais_all['mmsi'].nunique()} unique vessels")
+print(
+    f"  AIS used for tracking: {len(ais)} messages from "
+    f"{ais['mmsi'].nunique()} moving vessels"
+)
 print(f"  GNSS:   {len(gnss)} fixes")
 
 
@@ -59,7 +79,7 @@ print(f"  GNSS:   {len(gnss)} fixes")
 # Dana IV ground truth
 # ---------------------------------------------------------------------
 
-dana = ais[ais["mmsi"] == 219384000].copy().sort_values("time")
+dana = ais_all[ais_all["mmsi"] == 219384000].copy().sort_values("time")
 
 print(f"\nDana IV: {len(dana)} AIS points")
 
@@ -118,6 +138,7 @@ ce_list      = []
 t_list       = []
 
 radar_times   = sorted(radar["time"].unique())
+used_camera_keys = set()
 used_ais_keys = set()   # deduplicate AIS: each message injected only once
 
 print(f"\nProcessing {len(radar_times)} radar scans...")
@@ -150,8 +171,19 @@ for t in radar_times:
     camera_meas = []
     cam_window = camera[
         (camera["time"] >= t - 2.0) & (camera["time"] <= t + 2.0)
-    ]
+    ].copy()
+
+    if not cam_window.empty:
+        cam_window["_dt"] = np.abs(cam_window["time"] - t)
+        nearest_camera_time = cam_window.loc[cam_window["_dt"].idxmin(), "time"]
+        cam_window = cam_window[cam_window["time"] == nearest_camera_time]
+
     for _, row in cam_window.iterrows():
+        key = (float(row["time"]), float(row["X"]), float(row["Z"]))
+        if key in used_camera_keys:
+            continue
+        used_camera_keys.add(key)
+
         cam_range   = float(np.sqrt(row["X"] ** 2 + row["Z"] ** 2))
         cam_bearing = float(np.arctan2(row["X"], row["Z"])) + CAMERA_ROT
         camera_meas.append({
@@ -162,15 +194,26 @@ for t in radar_times:
             "bearing_rad": cam_bearing,
         })
 
-    # ── AIS (deduplicated: each message icted only once) ───────────
+    # ── AIS (nearest unused report per MMSI) ───────────────────────
     ais_meas = []
     ais_window = ais[
         (ais["time"] >= t - 4.0) & (ais["time"] <= t + 4.0)
-    ]
+    ].copy()
+
+    if not ais_window.empty:
+        ais_window["_dt"] = np.abs(ais_window["time"] - t)
+        ais_window = ais_window.sort_values("_dt")
+
+    seen_mmsi_this_scan = set()
     for _, row in ais_window.iterrows():
-        key = (int(row["mmsi"]), float(row["time"]))
+        mmsi = int(row["mmsi"])
+        key = (mmsi, float(row["time"]))
+
+        if mmsi in seen_mmsi_this_scan:
+            continue
         if key in used_ais_keys:
             continue
+        seen_mmsi_this_scan.add(mmsi)
         used_ais_keys.add(key)
         ais_meas.append({
             "sensor_id":   "ais",
@@ -212,7 +255,23 @@ for t in radar_times:
 rmse_real   = float(np.sqrt(np.mean(rmse_sq_list))) if rmse_sq_list else float("nan")
 motp_real   = float(np.mean(motp_list))             if motp_list    else float("nan")
 ce_real     = float(np.mean(ce_list))               if ce_list      else float("nan")
-long_tracks = [tid for tid, h in track_history.items() if len(h) >= 5]
+def track_path_length(history):
+    pts = np.array([(h[1], h[2]) for h in history], dtype=float)
+
+    if len(pts) < 2:
+        return 0.0
+
+    return float(np.sum(np.linalg.norm(np.diff(pts, axis=0), axis=1)))
+
+
+MIN_PLOT_UPDATES = 5
+MIN_PLOT_PATH_M = 0.0
+
+long_tracks = [
+    tid
+    for tid, h in track_history.items()
+    if len(h) >= MIN_PLOT_UPDATES and track_path_length(h) >= MIN_PLOT_PATH_M
+]
 
 print(f"\n{'=' * 55}")
 print("Phase 4 — Real data metrics  (t ≤ 350 s, Dana IV in range)")
@@ -221,7 +280,7 @@ print(f"  RMSE vs Dana IV AIS        : {rmse_real:.1f} m")
 print(f"  MOTP closest track         : {motp_real:.1f} m")
 print(f"  Mean CE (|confirmed - 1|)  : {ce_real:.2f}")
 print(f"  Max confirmed tracks       : {max(ce_list) + 1 if ce_list else 'N/A'}")
-print(f"  Tracks with >=5 updates    : {len(long_tracks)}")
+print(f"  Confirmed tracks plotted   : {len(long_tracks)}")
 print(f"{'=' * 55}")
 print("\nSimulation vs real performance:")
 print("  Simulation MOTP Scen. D    : 3.9 m")
@@ -255,8 +314,8 @@ else:
         return east_m, north_m
 
     coord_label = ("East (m)", "North (m)")
-    xlim = (-600, 1500)
-    ylim = (-600, 1500)
+    xlim = (-1000, 3000)
+    ylim = (-1000, 3000)
     ax.set_facecolor("#F0F4F8")
     ax.grid(True, color="white", linewidth=1.2, zorder=0)
 
@@ -265,11 +324,13 @@ COLOURS = [
     "#4CAF50", "#FF5722", "#795548", "#607D8B", "#E91E63",
 ]
 
-MIN_UPDATES = 5
 plotted = 0
 
 for tid, history in track_history.items():
-    if len(history) < MIN_UPDATES:
+    if len(history) < MIN_PLOT_UPDATES:
+        continue
+
+    if track_path_length(history) < MIN_PLOT_PATH_M:
         continue
     xs = [to_plot(h[1], h[2])[0] for h in history]
     ys = [to_plot(h[1], h[2])[1] for h in history]
@@ -331,7 +392,7 @@ if HAS_CONTEXTILY:
 ax.legend(fontsize=9, loc="upper left")
 
 stats = (
-    f"Tracks >=5 updates: {plotted}\n"
+    f"Confirmed tracks plotted: {plotted}\n"
     f"RMSE vs Dana IV: {rmse_real:.0f} m\n"
     f"MOTP t<={EVAL_T_END:.0f}s: {motp_real:.0f} m\n"
     f"Mean CE (|n_confirmed-1|): {ce_real:.2f}"
