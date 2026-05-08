@@ -1,3 +1,34 @@
+# Multi-Sensor Multi-Target Tracking System for Harbour Surveillance
+
+## Installation
+
+Python 3.10+ required.
+
+```bash
+pip install numpy==2.4.4 scipy==1.17.1 matplotlib pandas contextily
+```
+
+## How to run
+
+**Simulated scenarios**
+
+```bash
+python T3_single_sensor_tracker.py harbour_sim_output/scenario_A.json  # Radar only
+python T4_radar_camera_fusion.py   harbour_sim_output/scenario_B.json  # Radar + camera
+python T5_ais_fusion.py            harbour_sim_output/scenario_C.json  # AIS fusion
+python T6_gating_and_data_association.py harbour_sim_output/scenario_D.json  # Multi-target
+python T7_Track_managment.py harbour_sim_output/scenario_D.json         # Scenario D
+python T7_Track_managment.py harbour_sim_output/scenario_E.json         # Scenario E
+```
+
+**Real data**
+
+```bash
+python phase4_real_data_with_sat_map.py
+```
+
+## Description
+
 This multi-target tracking system combines Mahalanobis-distance gating with Global Nearest Neighbour (GNN) data association to track multiple objects simultaneously using radar and camera measurements. For each track and sensor, measurements are first filtered using a statistical gate based on the Mahalanobis distance, where a detection is accepted if its distance to the predicted measurement is below a threshold derived from the χ² distribution with probability P=0.99. This step reduces the number of unlikely associations and improves robustness under clutter.
 
 All gated measurements from all sensors are then combined into a single association problem. A cost matrix is constructed where each entry represents the Mahalanobis distance between a track and a measurement, and invalid associations (outside the gate) are assigned a large cost. The Hungarian algorithm is used to compute the optimal one-to-one assignment between tracks and measurements. Tracks that are not assigned receive a missed-detection flag, while unassigned measurements are considered for track initiation.
