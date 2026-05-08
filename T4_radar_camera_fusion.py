@@ -306,9 +306,6 @@ def print_scenario_b_results(results: dict) -> None:
     print("=" * 60)
 
 
-# ---------------------------------------------------------------------------
-# Demo / smoke test
-# ---------------------------------------------------------------------------
 
 def demo_fusion_tracker() -> RadarCameraFusionTracker:
     return RadarCameraFusionTracker.from_detection(

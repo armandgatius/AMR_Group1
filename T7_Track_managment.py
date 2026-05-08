@@ -15,7 +15,7 @@ from T6_gating_data_association import (
 from T2_CoordinateFrameManager import CoordinateFrameManager
 
 # set True for simulation, False for real data
-SIMULATION_MODE = True
+SIMULATION_MODE = False
 
 # CONFIRMATION_M = 5 # FOR REAL SCENARIO
 
@@ -25,8 +25,8 @@ CONFIRMATION_N = 5 if SIMULATION_MODE else 12  # 5 for simulation, 10 for real s
 M_DELETE_CONFIRMED = 6
 M_DELETE_TENTATIVE = 4
 M_DELETE_EKF_TENT  = 4
-PRE_GATE_M         = 50.0   # = 25 FOR REAL SCENARIO,50 FOR SIMULATION
-MAX_INIT_SPEED_MS  = 5.0   # = 5  FOR REAL SCENARIO (harbour ~10 kn), 25 FOR SIMUALTION 
+PRE_GATE_M         = 50.0 if SIMULATION_MODE else 25.0  # 25 FOR REAL SCENARIO,50 FOR SIMULATION
+MAX_INIT_SPEED_MS  = 5.0   # max speed for initializing velocity from two detections
 OSPA_GRACE_SCANS   = 10     # scans to skip before checking per-scan OSPA limit
 MOTP_MAX_DIST      = 100.0  # distance threshold: pairs beyond this don't count in MOTP
 
@@ -639,8 +639,8 @@ class TrackManager(MultiTargetTracker):
             if pt.missed < M_DELETE_TENTATIVE
         ]
 
-        # self._delete_static_clutter_tracks(t)
-        # self._delete_short_fragment_tracks(t)
+        self._delete_static_clutter_tracks(t)
+        self._delete_short_fragment_tracks(t)
         self._delete_tracks_with_excessive_misses(t)
         self._merge_duplicates()
 
@@ -919,32 +919,6 @@ def test_gating_scenario(
     if n_detected_gate > 0:
         print(f"\nEmpirical gate inclusion rate: {n_in_gate / n_detected_gate:.3f}")
 
-    mean_ce = float(np.mean(ce_series)) if ce_series else float("nan")
-    mean_ospa = float(np.mean(ospa_series)) if ospa_series else float("nan")
-    mean_motp = float(np.mean(motp_distances)) if motp_distances else float("nan")
-
-    # print(f"\nScenario: {json_path}")
-    # print(f"CE time series: {[int(v) for v in ce_series]}")
-    # print(f"Mean CE: {mean_ce:.3f}")
-
-    # print(f"\nOSPA time series: {[f'{v:.1f}' for v in ospa_series]}")
-    # print(f"Mean OSPA: {mean_ospa:.2f} m")
-
-    # print(f"\nMOTP time series: {[f'{v:.1f}' for v in motp_series]}")
-    # print(f"Mean MOTP: {mean_motp:.2f} m")
-
-    # assert mean_ce <= 1.0, f"Mean CE {mean_ce:.3f} > 1.0"
-    # ospa_steady = ospa_series[OSPA_GRACE_SCANS:]
-    # if ospa_steady:
-    #     mean_ospa_steady = float(np.mean(ospa_steady))
-    #     print(f"Mean OSPA (after grace period): {mean_ospa_steady:.2f} m")
-    #     assert mean_ospa_steady < ospa_limit, (
-    #         f"Mean OSPA {mean_ospa_steady:.2f} m >= {ospa_limit:.1f} m after grace period"
-    #     )
-
-    # if identity_swap > 0:
-    #     assert False, f"{identity_swap} identity swaps detected"
-
     tm.assert_end_of_run(
         target_ids=target_ids,
         data=data,
@@ -962,7 +936,7 @@ if __name__ == "__main__":
 
 
     test_gating_scenario(
-        "harbour_sim_output/scenario_D.json",
+        "harbour_sim_output/scenario_E.json",
         ospa_limit=50.0,
     )
     

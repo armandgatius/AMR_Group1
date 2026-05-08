@@ -75,9 +75,8 @@ print(
 print(f"  GNSS:   {len(gnss)} fixes")
 
 
-# ---------------------------------------------------------------------
 # Dana IV ground truth
-# ---------------------------------------------------------------------
+
 
 dana = ais_all[ais_all["mmsi"] == 219384000].copy().sort_values("time")
 
@@ -95,9 +94,8 @@ def get_dana_pos(t, window=8.0):
     return None
 
 
-# ---------------------------------------------------------------------
+
 # Own vessel GNSS lookup
-# ---------------------------------------------------------------------
 
 gnss_times = gnss["time"].values
 gnss_N_arr = gnss["N"].values
@@ -109,9 +107,9 @@ def get_vessel(t):
     return np.array([gnss_N_arr[idx], gnss_E_arr[idx]], dtype=float)
 
 
-# ---------------------------------------------------------------------
-# Coordinate frame manager
-# ---------------------------------------------------------------------
+
+# Coordinate frame managerRadar
+
 
 cfm = CoordinateFrameManager(
     camera_offset=np.array([-80.0, 120.0], dtype=float),
@@ -125,9 +123,9 @@ cfm.update_vessel_position(np.array([0.0, 0.0]))
 tm = TrackManager(cfm)
 
 
-# ---------------------------------------------------------------------
+
 # Main tracking loop
-# ---------------------------------------------------------------------
+
 
 track_history  = {}
 vessel_history = []
@@ -155,7 +153,7 @@ for t in radar_times:
 
     vessel_history.append((t, vessel_pos[0], vessel_pos[1]))
 
-    # ── Radar ────────────────────────────────────────────────────────
+    
     radar_meas = []
     for _, row in radar[radar["time"] == t].iterrows():
         bearing = np.deg2rad(float(row["bearing"])) + RADAR_ROT
@@ -167,7 +165,6 @@ for t in radar_times:
             "bearing_rad": float(bearing),
         })
 
-    # ── Camera (nearest scan within ±2 s) ────────────────────────────
     camera_meas = []
     cam_window = camera[
         (camera["time"] >= t - 2.0) & (camera["time"] <= t + 2.0)
@@ -194,7 +191,6 @@ for t in radar_times:
             "bearing_rad": cam_bearing,
         })
 
-    # ── AIS (nearest unused report per MMSI) ───────────────────────
     ais_meas = []
     ais_window = ais[
         (ais["time"] >= t - 4.0) & (ais["time"] <= t + 4.0)
@@ -248,9 +244,7 @@ for t in radar_times:
             motp_list.append(best)
 
 
-# ---------------------------------------------------------------------
-# Scalar metrics
-# ---------------------------------------------------------------------
+
 
 rmse_real   = float(np.sqrt(np.mean(rmse_sq_list))) if rmse_sq_list else float("nan")
 motp_real   = float(np.mean(motp_list))             if motp_list    else float("nan")
@@ -293,9 +287,7 @@ print("  3. Harbour multipath creates extra ghost detections")
 print(f"{'=' * 55}")
 
 
-# ---------------------------------------------------------------------
-# Plot
-# ---------------------------------------------------------------------
+
 
 print("\nGenerating trajectory plot...")
 
@@ -337,7 +329,7 @@ for tid, history in track_history.items():
     col = COLOURS[plotted % len(COLOURS)]
     ax.plot(xs, ys, color=col, linewidth=1.8, alpha=0.75, zorder=3)
     ax.scatter(xs[-1], ys[-1], color=col, s=50, zorder=4)
-    ax.annotate(f"Track {tid}", (xs[-1], ys[-1]),
+    ax.annotate(f"Track {plotted + 1}", (xs[-1], ys[-1]),
                 fontsize=7, color=col, xytext=(5, 5),
                 textcoords="offset points")
     plotted += 1
